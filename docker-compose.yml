@@ -1,0 +1,131 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      obs-net:
+        ipv4_address: 172.21.0.10
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node_exporter
+    ports:
+      - "9100:9100"
+    networks:
+      obs-net:
+    restart: unless-stopped
+
+  snmp_exporter:
+    image: prom/snmp-exporter:latest
+    container_name: snmp_exporter
+    ports:
+      - "9116:9116"
+    networks:
+      obs-net:
+        ipv4_address: 172.21.0.11
+    restart: unless-stopped
+
+  router_sim:
+    image: towsos_net-snmp
+    container_name: router_sim
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "161:161/udp"
+    networks:
+      obs-net:
+        ipv4_address: 172.21.0.12
+    volumes:
+      - ./snmpd.conf:/usr/local/etc/snmp/snmpd.conf
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.2
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      obs-net:
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.2
+    container_name: promtail
+    volumes:
+      - /var/log:/var/log:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml
+      - ./cloud-logs:/var/cloud-logs:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      obs-net:
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - loki
+      - prometheus
+    networks:
+      obs-net:
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      obs-net:
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel_collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4318:4318"
+    depends_on:
+      - jaeger
+    networks:
+      obs-net:
+    restart: unless-stopped
+
+  hotrod:
+    image: jaegertracing/example-hotrod:latest
+    container_name: hotrod_app
+    ports:
+      - "8080:8080"
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    command: ["all", "--otel-exporter=otlp"]
+    depends_on:
+      - otel-collector
+    networks:
+      obs-net:
+    restart: unless-stopped
+
+networks:
+  obs-net:
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
